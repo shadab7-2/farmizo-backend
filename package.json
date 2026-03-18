@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js",
+    "build": "echo \"No build step required\"",
     "seed": "node seed/categories.seed.js",
     "seed:products": "node seed/product.seed.js"
   },
