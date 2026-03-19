@@ -2,6 +2,7 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/user.model.js");
 const ApiError = require("../utils/ApiError.js");
 const emailService = require("../services/email.service");
+const { generateAccessToken, generateRefreshToken } = require("../utils/token");
 
 /* ================= REGISTER ================= */
 exports.registerUser = async (req, res, next) => {
@@ -26,16 +27,15 @@ exports.registerUser = async (req, res, next) => {
     // Fire-and-forget: send welcome email
     emailService.sendWelcomeEmail({ name: user.name, email: user.email }).catch(() => {});
 
-    /* 🔐 CREATE TOKEN */
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: "7d",
-    });
+    /* CREATE TOKENS */
+    const accessToken = generateAccessToken({ id: user._id });
+    const refreshToken = generateRefreshToken({ id: user._id });
 
-    /* 🍪 SEND COOKIE */
-    res.cookie("token", token, {
+    /* SEND REFRESH COOKIE */
+    res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
-      secure: false, // true in production
-      sameSite: "lax",
+      secure: false, // set true behind HTTPS
+      sameSite: "Strict",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
@@ -50,7 +50,7 @@ exports.registerUser = async (req, res, next) => {
           phone: user.phone,
           addresses: user.addresses || [],
         },
-        token,
+        accessToken,
       },
     });
   } catch (err) {
@@ -69,14 +69,13 @@ exports.loginUser = async (req, res, next) => {
       throw new ApiError(403, "Your account is disabled. Contact support.");
     }
 
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: "7d",
-    });
+    const accessToken = generateAccessToken({ id: user._id });
+    const refreshToken = generateRefreshToken({ id: user._id });
 
-    res.cookie("token", token, {
+    res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
       secure: false,
-      sameSite: "lax",
+      sameSite: "Strict",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
@@ -92,7 +91,7 @@ exports.loginUser = async (req, res, next) => {
           addresses: user.addresses || [],
           isActive: user.isActive !== false,
         },
-        token,
+        accessToken,
       },
     });
   } catch (err) {
@@ -103,16 +102,51 @@ exports.loginUser = async (req, res, next) => {
 /* ================= LOGOUT ================= */
 exports.logoutUser = async (req, res, next) => {
   try {
-    res.cookie("token", "", {
+    res.cookie("refreshToken", "", {
       httpOnly: true,
       secure: false,
-      sameSite: "lax",
+      sameSite: "Strict",
       expires: new Date(0),
     });
 
     res.status(200).json({
       success: true,
       message: "Logged out successfully",
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/* ================= REFRESH TOKEN ================= */
+exports.refreshToken = async (req, res, next) => {
+  try {
+    const token = req.cookies?.refreshToken;
+
+    if (!token) {
+      throw new ApiError(401, "Refresh token missing");
+    }
+
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
+    );
+
+    const user = await User.findById(decoded.id).select("-password");
+
+    if (!user) {
+      throw new ApiError(401, "User not found");
+    }
+
+    if (user.isActive === false) {
+      throw new ApiError(403, "User account is disabled");
+    }
+
+    const accessToken = generateAccessToken({ id: user._id });
+
+    res.status(200).json({
+      success: true,
+      data: { accessToken },
     });
   } catch (err) {
     next(err);

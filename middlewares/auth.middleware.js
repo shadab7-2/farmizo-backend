@@ -11,28 +11,14 @@ const User = require("../models/user.model");
 
 const protect = async (req, res, next) => {
   try {
-    let token = null;
-
-    // 1️⃣ Check Authorization header
-    if (
-      req.headers.authorization &&
-      req.headers.authorization.startsWith("Bearer ")
-    ) {
-      token = req.headers.authorization.split(" ")[1];
-    }
-     // 2) Fallback to httpOnly cookie
-    if (!token && req.cookies?.token) {
-      token = req.cookies.token;
-    }
-    // 2️⃣ Token missing
-    if (!token) {
+    const authHeader = req.headers.authorization || "";
+    if (!authHeader.startsWith("Bearer ")) {
       return next(new ApiError(401, "Not authorized, token missing"));
     }
 
-    // 3️⃣ Verify token
+    const token = authHeader.split(" ")[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // 4️⃣ Find user
     const user = await User.findById(decoded.id).select("-password");
 
     if (!user) {
@@ -42,7 +28,6 @@ const protect = async (req, res, next) => {
       return next(new ApiError(403, "User account is disabled"));
     }
 
-    // 5️⃣ Attach user to request
     req.user = user;
 
     next();

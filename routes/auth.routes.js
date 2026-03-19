@@ -13,6 +13,7 @@ const {
   loginUser,
   logoutUser,
   getMe,
+  refreshToken,
 } = require("../controllers/auth.controller");
 
 /*
@@ -41,6 +42,10 @@ router.post("/login", loginUser);
 // POST /api/auth/logout
 // Logout user and clear auth cookie
 router.post("/logout", logoutUser);
+
+// POST /api/auth/refresh
+// Issue new access token using refresh token cookie
+router.post("/refresh", refreshToken);
 
 // GET /api/auth/me
 // Get logged-in user profile (protected)
