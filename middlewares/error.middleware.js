@@ -1,4 +1,6 @@
-﻿// Global Error Handler Middleware
+const apiResponse = require("../utils/apiResponse");
+
+// Global Error Handler Middleware
 const errorHandler = (err, req, res, next) => {
   console.error("Error:", err);
 
@@ -33,11 +35,15 @@ const errorHandler = (err, req, res, next) => {
     message = "Maximum 6 images are allowed";
   }
 
-  res.status(statusCode).json({
-    success: false,
-    message,
-    stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
-  });
+  res.status(statusCode).json(
+    apiResponse({
+      success: false,
+      message,
+      error: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      status: statusCode,
+      data: null,
+    }),
+  );
 };
 
 module.exports = errorHandler;

@@ -1,20 +1,48 @@
-const ApiError = require("../utils/ApiError");
+const { ZodError } = require("zod");
+const apiResponse = require("../utils/apiResponse");
 
-const validateRequiredFields = (fields = [], source = "body") => (req, res, next) => {
-  const payload = req?.[source] || {};
+const validate =
+  (schemas = {}) =>
+  (req, res, next) => {
+    try {
+      const { body, query, params } = schemas;
 
-  const missing = fields.filter((field) => {
-    const value = payload[field];
-    return value === undefined || value === null || String(value).trim() === "";
-  });
+      if (body) {
+        const parsed = body.safeParse(req.body);
+        if (!parsed.success) throw parsed.error;
+        req.body = parsed.data;
+      }
 
-  if (missing.length > 0) {
-    return next(new ApiError(400, `Missing required field(s): ${missing.join(", ")}`));
-  }
+      if (query) {
+        const parsed = query.safeParse(req.query);
+        if (!parsed.success) throw parsed.error;
+        req.query = parsed.data;
+      }
 
-  return next();
-};
+      if (params) {
+        const parsed = params.safeParse(req.params);
+        if (!parsed.success) throw parsed.error;
+        req.params = parsed.data;
+      }
 
-module.exports = {
-  validateRequiredFields,
-};
+      return next();
+    } catch (err) {
+      if (err instanceof ZodError) {
+        const formatted = err.errors.map((e) => ({
+          path: e.path.join("."),
+          message: e.message,
+        }));
+        return res.status(400).json(
+          apiResponse({
+            success: false,
+            message: "Validation failed",
+            error: formatted,
+            status: 400,
+          }),
+        );
+      }
+      return next(err);
+    }
+  };
+
+module.exports = validate;
