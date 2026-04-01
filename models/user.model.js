@@ -30,6 +30,11 @@ const userSchema = new mongoose.Schema(
       select: false, // hide by default
     },
 
+    refreshToken: {
+      type: String,
+      select: false, // stored securely, never returned by default
+    },
+
     role: {
       type: String,
       enum: ["user", "admin"],

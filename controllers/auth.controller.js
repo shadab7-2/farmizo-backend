@@ -25,19 +25,36 @@ exports.registerUser = async (req, res, next) => {
     });
 
     // Fire-and-forget: send welcome email
-    emailService.sendWelcomeEmail({ name: user.name, email: user.email }).catch(() => {});
+    emailService
+      .sendWelcomeEmail({ name: user.name, email: user.email })
+      .catch(() => {});
 
     /* CREATE TOKENS */
     const accessToken = generateAccessToken({ id: user._id });
     const refreshToken = generateRefreshToken({ id: user._id });
 
+    // Persist refresh token for rotation/revocation
+    user.refreshToken = refreshToken;
+    await user.save({ validateBeforeSave: false });
+
     /* SEND REFRESH COOKIE */
+    const isProduction = process.env.NODE_ENV === "production";
+
+    // Set refresh cookie with secure attributes and scoped path for refresh endpoint
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
-      secure: false, // set true behind HTTPS
-      sameSite: "Strict",
+      secure: isProduction, // ✅ true on Render (HTTPS)
+      sameSite: isProduction ? "None" : "Lax", // 🔥 CRITICAL FIX
+      path: "/api/auth/refresh", // limit cookie scope to refresh endpoint
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
+
+    // res.cookie("refreshToken", refreshToken, {
+    //   httpOnly: true,
+    //   secure: false, // set true behind HTTPS
+    //   sameSite: "Strict",
+    //   maxAge: 7 * 24 * 60 * 60 * 1000,
+    // });
 
     res.status(201).json({
       success: true,
@@ -54,6 +71,13 @@ exports.registerUser = async (req, res, next) => {
       },
     });
   } catch (err) {
+    // Explicitly map JWT errors to ApiError for consistent responses
+    if (err.name === "TokenExpiredError") {
+      return next(new ApiError(401, "Refresh token expired"));
+    }
+    if (err.name === "JsonWebTokenError") {
+      return next(new ApiError(401, "Invalid refresh token"));
+    }
     next(err);
   }
 };
@@ -61,7 +85,7 @@ exports.loginUser = async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
-    const user = await User.findOne({ email }).select("+password");
+    const user = await User.findOne({ email }).select("+password +refreshToken");
     if (!user || !(await user.matchPassword(password))) {
       throw new ApiError(401, "Invalid credentials");
     }
@@ -72,10 +96,18 @@ exports.loginUser = async (req, res, next) => {
     const accessToken = generateAccessToken({ id: user._id });
     const refreshToken = generateRefreshToken({ id: user._id });
 
+    // Store latest refresh token (rotation-ready)
+    user.refreshToken = refreshToken;
+    await user.save({ validateBeforeSave: false });
+
+    const isProduction = process.env.NODE_ENV === "production";
+
+    // Store latest refresh cookie with scoped path
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
-      secure: false,
-      sameSite: "Strict",
+      secure: isProduction,
+      sameSite: isProduction ? "None" : "Lax",
+      path: "/api/auth/refresh", // scoped cookie
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
@@ -102,10 +134,20 @@ exports.loginUser = async (req, res, next) => {
 /* ================= LOGOUT ================= */
 exports.logoutUser = async (req, res, next) => {
   try {
+    const userId = req.user?._id;
+
+    if (userId) {
+      await User.findByIdAndUpdate(userId, {
+        $unset: { refreshToken: 1 },
+      });
+    }
+
+    // Clear cookie and invalidate stored refresh token
     res.cookie("refreshToken", "", {
       httpOnly: true,
-      secure: false,
-      sameSite: "Strict",
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
+      path: "/api/auth/refresh", // match path to overwrite cookie
       expires: new Date(0),
     });
 
@@ -129,26 +171,48 @@ exports.refreshToken = async (req, res, next) => {
 
     const decoded = jwt.verify(
       token,
-      process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
+      process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET
     );
 
-    const user = await User.findById(decoded.id).select("-password");
+    const user = await User.findById(decoded.id).select("+refreshToken");
 
-    if (!user) {
-      throw new ApiError(401, "User not found");
+    if (!user || user.refreshToken !== token) {
+      throw new ApiError(401, "Invalid refresh token");
     }
 
     if (user.isActive === false) {
       throw new ApiError(403, "User account is disabled");
     }
 
-    const accessToken = generateAccessToken({ id: user._id });
+    // 🔥 ROTATION
+    const newAccessToken = generateAccessToken({ id: user._id });
+    const newRefreshToken = generateRefreshToken({ id: user._id });
+
+    user.refreshToken = newRefreshToken;
+    await user.save({ validateBeforeSave: false });
+
+    const isProduction = process.env.NODE_ENV === "production";
+
+    res.cookie("refreshToken", newRefreshToken, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "None" : "Lax",
+      path: "/api/auth/refresh", // scoped cookie for refresh endpoint only
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
 
     res.status(200).json({
       success: true,
-      data: { accessToken },
+      data: { accessToken: newAccessToken },
     });
   } catch (err) {
+    // Surface token errors with consistent messaging
+    if (err.name === "TokenExpiredError") {
+      return next(new ApiError(401, "Refresh token expired"));
+    }
+    if (err.name === "JsonWebTokenError") {
+      return next(new ApiError(401, "Invalid refresh token"));
+    }
     next(err);
   }
 };
